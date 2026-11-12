@@ -1,4 +1,5 @@
-# System A vs System B reconciliation
+# ADOSX_Assignment
+A Django and React application that compares records from two systems, detects missing, duplicate and mismatched entries, and ensures secure multi-tenant data isolation.
 
 Imports two systems' exports of the same events, finds where they disagree, and shows each tenant (org) only its own disagreements.
 
