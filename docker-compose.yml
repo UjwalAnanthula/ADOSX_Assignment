@@ -1,0 +1,8 @@
+# Optional: a throwaway local PostgreSQL for development.
+# Credentials come from backend/.env (copy backend/.env.example first).
+services:
+  db:
+    image: postgres:17-alpine
+    env_file: backend/.env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
