@@ -46,7 +46,7 @@ def _shape_errors(raw):
 def _resolve_location(raw_location_id, locations, errors):
     location = locations.get(_clean(raw_location_id))
     if location is None:
-        errors.append(f"location_id {raw_location_id!r} not in locations.csv")
+        errors.append(f"location_id {raw_location_id!r} has no single owning org in locations.csv")
     return location
 
 
@@ -67,17 +67,34 @@ def _date(raw, column, errors):
 
 
 def _import_locations(path, stats):
-    orgs, locations = {}, {}
+    """location -> org is the tenant boundary, so it must be unambiguous.
+
+    A location_id claimed by two different orgs is left UNMAPPED: rows at that
+    location then belong to no tenant (operator-only), instead of silently going
+    to whichever claim came first. Every such line is reported.
+    """
+    claims = {}
     for line, raw in _read_csv(path):
         stats["rows_read"] += 1
         org_id, loc_id = _clean(raw.get("org_id")), _clean(raw.get("location_id"))
         if not org_id or not loc_id:
-            # A location without an org cannot be owned by any tenant; report it loudly.
             stats["issues"].append({"line": line, "errors": ["location_id or org_id blank: row rejected"], "raw": raw})
             continue
-        org = orgs.get(org_id) or Org.objects.create(org_id=org_id)
-        orgs[org_id] = org
-        locations[loc_id] = Location.objects.create(location_id=loc_id, org=org, name=_clean(raw.get("location_name")))
+        claims.setdefault(loc_id, []).append((line, org_id, _clean(raw.get("location_name")), raw))
+
+    orgs, locations = {}, {}
+    for loc_id, rows in claims.items():
+        owners = sorted({org_id for _, org_id, _, _ in rows})
+        if len(owners) > 1:
+            for line, _, _, raw in rows:
+                stats["issues"].append({"line": line, "raw": raw, "errors": [
+                    f"location {loc_id} is claimed by {', '.join(owners)}: ownership ambiguous, location left unmapped"]})
+            continue
+        for line, _, _, raw in rows[1:]:
+            stats["issues"].append({"line": line, "raw": raw, "errors": [f"duplicate of location {loc_id}: ignored"]})
+        _, org_id, name, _ = rows[0]
+        orgs[org_id] = orgs.get(org_id) or Org.objects.create(org_id=org_id)
+        locations[loc_id] = Location.objects.create(location_id=loc_id, org=orgs[org_id], name=name)
         stats["rows_stored"] += 1
     return locations
 
