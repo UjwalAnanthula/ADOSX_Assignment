@@ -32,9 +32,13 @@ Why: on clean rows B equals `total_value` exactly. The mismatches where B equals
 Rejected: ignore it because B has no state column.
 Why: a voided event still being counted elsewhere is exactly what someone reconciling would want to see. This is a judgment call and is listed as one in the README.
 
-**9. No auth: the tenant comes from an `X-Org-Id` header, which the API requires (400 if missing, 404 if unknown).**
-Rejected: an unscoped "all orgs" default, or tenant filtering in the frontend only.
-Why: the brief says to skip auth, but the boundary must still be enforced server-side. Later, the header becomes the session's org and nothing else changes.
+**9. The tenant comes only from a server-signed tenant-context token. A different tenant named anywhere else in the request gets 403. Without auth, a demo-only endpoint issues the token and can be switched off.**
+Rejected: trusting an `X-Org-Id` header or `?org=` (the first version did this, and any client could read any tenant by changing it), or adding a login system (out of scope).
+Why: the server, not the caller, must decide the tenant. Signing makes the context unforgeable, and the demo issuer is the one place a real login would plug in.
+
+**9b. A location claimed by two orgs in locations.csv is left unmapped (its rows belong to no tenant).**
+Rejected: first claim wins.
+Why: picking an owner arbitrarily could hand one tenant's rows to another; refusing to guess cannot.
 
 **10. Discrepancies are recomputed and stored at import time (one table), and re-import replaces everything in one transaction.**
 Rejected: compute on every request, or upsert incrementally.

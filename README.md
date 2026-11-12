@@ -71,11 +71,16 @@ npm ci
 npm run dev                                     # http://localhost:5173 (proxies /api to :8000)
 ```
 
-### API
-All tenant endpoints require the header `X-Org-Id: ORG-A` (400 without it, 404 if unknown).
-- `GET /api/orgs/`: org ids (stands in for login in the demo UI)
-- `GET /api/discrepancies/?reason=VALUE_MISMATCH&ordering=-b_value`: `ordering` ∈ `a_value, -a_value, b_value, -b_value` (nulls last)
-- `GET /api/summary/`: counts per reason, import row counts for the tenant, and the last import time
+### API and tenant context
+The tenant of a data request is decided **only by the server**, from a tenant-context token it signed ([recon/tenancy.py](backend/recon/tenancy.py)). It is never decided by a header, query parameter or the page URL.
+
+- `POST /api/tenant-context/` with `{"org": "ORG-A"}` returns `{org, token}`. **Demo only:** a stand-in for login, on when `ADOSX_DEMO_TENANT_SWITCHING=1` (default: same as `DJANGO_DEBUG`). Off, it returns 404.
+- `GET /api/orgs/`: org ids for the demo picker (demo only, same switch).
+- `GET /api/discrepancies/?reason=VALUE_MISMATCH&ordering=-b_value` and `GET /api/summary/` need `Authorization: Bearer <token>`. `ordering` ∈ `a_value, -a_value, b_value, -b_value` (nulls last).
+
+Responses: no or invalid or expired token gives **401**. A valid token plus any *other* tenant named in `X-Org-Id`, `X-Tenant-Id`, `?org=`, `?org_id=`, `?tenant=` or `?tenant_id=` gives **403** (rejected, not silently ignored). Tokens are signed with `DJANGO_SECRET_KEY`. Dev without one uses a random key per process, so contexts reset on restart. With `DJANGO_DEBUG=0` it must be set.
+
+**Limitation (honest):** while demo switching is on, anyone who can reach the API can request any tenant's context. That's the demo picker. What the design guarantees is that *inside* a context nothing reaches another tenant's data, and that switching tenants is an explicit server action. It is **not** production authorisation: that needs an authenticated identity bound to an org, which would replace the demo issuer and leave everything else unchanged.
 
 ## Tests
 ```bash
@@ -83,12 +88,13 @@ cd backend && python manage.py test recon       # needs PostgreSQL (and a role a
 cd frontend && npm test
 ```
 - `test_reconcile.py`: the comparison rules. One test per disagreement kind, plus non-errors (split entry, messy refs, labels without a category), dirty values and the tenant boundary. No DB.
+- `test_tenant_security.py`: attacks on the tenant boundary (PostgreSQL). Missing, forged, tampered or expired contexts; ORG-A ⇄ ORG-B via params and headers; cross-tenant comparison rows; contested locations; demo switch off.
 - `test_import_and_api.py`: against PostgreSQL with a synthetic dirty dataset. No row dropped, raw preserved, ragged rows, repeat import, tenant isolation over HTTP, filter and sort.
 - `test_assignment_dataset.py`: exact expected discrepancy set for the real files. **Skipped** if `data/*.csv` are absent.
 
 - `frontend/src/App.test.jsx`: every tenant request carries `X-Org-Id`, switching org clears the reason filter, blank B values never show as 0, header sort, error + Retry, unknown `?reason=` dropped. `format.test.js` covers value display and B − A in exact cents.
 
-At the time of writing: 42 backend tests and 14 frontend tests pass.
+At the time of writing: 57 backend tests and 14 frontend tests pass.
 
 ## What it finds in the supplied data
 
@@ -118,13 +124,14 @@ Import: locations 5/5, system_a 120/120, system_b 121/121 rows stored. 0 rejecte
 - Tenant-scoped API and a table UI: summary cards (click to filter), colour-coded reason badges, reason filter, sort by A/B value (dropdown or column header), a B − A column, view state kept in the URL, and loading/empty/error-with-retry states.
 
 ## What I deliberately did not build
-- Authentication (the brief says to skip it). The `X-Org-Id` header stands in for the session's org.
+- Authentication (the brief says to skip it). A demo tenant-context endpoint stands in for login (see *API and tenant context*).
 - A UI for import issues or operator-only findings. They are printed by `import_data` and stored in `ImportRun` / `Discrepancy(org=NULL)`.
 - Checking A's internal arithmetic (`base + adjustment = total`). That's not a cross-system disagreement.
 - Fuzzy reference matching, non-ISO dates, currency symbols. These are reported as unparseable rather than guessed.
 - Pagination, performance work, visual design.
 
 ## Known limitations
+- Demo tenant switching lets any caller obtain any tenant's context (see above). Turn it off with `ADOSX_DEMO_TENANT_SWITCHING=0` anywhere real tenants exist.
 - The split rule is "entries sum exactly to A's total". Two genuinely duplicated half-entries that happen to sum to the total would pass as a split.
 - A record with several findings (e.g. value and date) shows as several rows. Sorting by value treats them independently.
 - Re-import replaces everything; there's no history of past discrepancy sets beyond `ImportRun` stats.
