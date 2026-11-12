@@ -110,6 +110,19 @@ describe("App", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("summary cards show the backend's per-reason counts and filter on click", async () => {
+    render(<App />);
+    await screen.findByText("REC-1027");
+    const cards = within(screen.getByRole("region", { name: "Summary" }));
+    expect(cards.getByRole("button", { name: /Total disagreements\s*2/ })).toBeTruthy();
+    expect(cards.getByRole("button", { name: /Missing records\s*1/ })).toBeTruthy();
+    expect(cards.getByRole("button", { name: /Orphan entries\s*0/ }).disabled).toBe(true);
+    fireEvent.click(cards.getByRole("button", { name: /Value mismatches\s*1/ }));
+    await waitFor(() => expect(calls.at(-1).params.reason).toBe("VALUE_MISMATCH"));
+    await waitFor(() => expect(tableRows()).toHaveLength(1));
+    expect(screen.getByLabelText("Reason").value).toBe("VALUE_MISMATCH");
+  });
+
   it("drops an unknown reason from the URL instead of sending it to the API", async () => {
     window.history.replaceState(null, "", "/?org=ORG-A&reason=NOT_A_REASON");
     render(<App />);

@@ -75,7 +75,7 @@ npm run dev                                     # http://localhost:5173 (proxies
 All tenant endpoints require the header `X-Org-Id: ORG-A` (400 without it, 404 if unknown).
 - `GET /api/orgs/`: org ids (stands in for login in the demo UI)
 - `GET /api/discrepancies/?reason=VALUE_MISMATCH&ordering=-b_value`: `ordering` ∈ `a_value, -a_value, b_value, -b_value` (nulls last)
-- `GET /api/summary/`: counts per reason and import row counts for the tenant
+- `GET /api/summary/`: counts per reason, import row counts for the tenant, and the last import time
 
 ## Tests
 ```bash
@@ -88,7 +88,7 @@ cd frontend && npm test
 
 - `frontend/src/App.test.jsx`: every tenant request carries `X-Org-Id`, switching org clears the reason filter, blank B values never show as 0, header sort, error + Retry, unknown `?reason=` dropped. `format.test.js` covers value display and B − A in exact cents.
 
-At the time of writing: 42 backend tests and 13 frontend tests pass.
+At the time of writing: 42 backend tests and 14 frontend tests pass.
 
 ## What it finds in the supplied data
 
@@ -115,7 +115,7 @@ Import: locations 5/5, system_a 120/120, system_b 121/121 rows stored. 0 rejecte
 ## What I built
 - Raw-preserving importer with per-row parse notes and an import audit (`ImportRun`).
 - Comparison engine: missing, orphan, duplicate, value, unparseable value, date, location, category (from B's label), voided, duplicate id in A, unknown location, cross-tenant.
-- Tenant-scoped API and a plain table: reason filter, sort by A/B value (dropdown or column header), a B − A column, view state kept in the URL, and loading/empty/error-with-retry states.
+- Tenant-scoped API and a table UI: summary cards (click to filter), colour-coded reason badges, reason filter, sort by A/B value (dropdown or column header), a B − A column, view state kept in the URL, and loading/empty/error-with-retry states.
 
 ## What I deliberately did not build
 - Authentication (the brief says to skip it). The `X-Org-Id` header stands in for the session's org.
