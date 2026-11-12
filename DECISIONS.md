@@ -1,8 +1,8 @@
 # Decisions
 
-**1. Match inside each tenant; never across.**
-Rejected: match globally on `record_ref`, then filter the results by org.
-Why: if the split by org happens before matching, a tenant's result cannot contain another tenant's row, even when there's a bug further down. A filter applied afterwards is one forgotten `.filter()` away from a leak.
+**1. Match inside each tenant; never across. A row's tenant is its location's org in locations.csv, and a location claimed by two orgs is left unmapped (its rows belong to no tenant).**
+Rejected: match globally on `record_ref` and then filter the results by org; for a contested location, let the first claim win.
+Why: if the split by org happens before matching, a tenant's result cannot contain another tenant's row, even when there's a bug further down. Guessing a contested location's owner could hand one tenant's rows to another; refusing to guess cannot.
 
 **2. A System B entry filed under another org's location (REC-1077) is shown as MISSING to the record's org, as ORPHAN to the entry's org, and as CROSS_TENANT to the operator only (`org = NULL`, never served by the API).**
 Rejected: show a "cross-tenant" row to ORG-A or ORG-B.
@@ -35,10 +35,6 @@ Why: a voided event still being counted elsewhere is exactly what someone reconc
 **9. The tenant comes only from a server-signed tenant-context token. A different tenant named anywhere else in the request gets 403. Without auth, a demo-only endpoint issues the token and can be switched off.**
 Rejected: trusting an `X-Org-Id` header or `?org=` (the first version did this, and any client could read any tenant by changing it), or adding a login system (out of scope).
 Why: the server, not the caller, must decide the tenant. Signing makes the context unforgeable, and the demo issuer is the one place a real login would plug in.
-
-**9b. A location claimed by two orgs in locations.csv is left unmapped (its rows belong to no tenant).**
-Rejected: first claim wins.
-Why: picking an owner arbitrarily could hand one tenant's rows to another; refusing to guess cannot.
 
 **10. Discrepancies are recomputed and stored at import time (one table), and re-import replaces everything in one transaction.**
 Rejected: compute on every request, or upsert incrementally.
