@@ -1,41 +1,46 @@
 # Decisions
 
-**1. Match inside each tenant; never across. A row's tenant is its location's org in locations.csv, and a location claimed by two orgs is left unmapped (its rows belong to no tenant).**
-Rejected: match globally on `record_ref` and then filter the results by org; for a contested location, let the first claim win.
-Why: if the split by org happens before matching, a tenant's result cannot contain another tenant's row, even when there's a bug further down. Guessing a contested location's owner could hand one tenant's rows to another; refusing to guess cannot.
+### 1. Match records only inside the same organisation
+- **Decision:** Split all rows by organisation first, then match. A location claimed by two organisations belongs to neither.
+- **Rejected:** Match everything together, then filter the results by organisation.
+- **Why:** If matching never crosses organisations, a result can't leak another organisation's data, even if there's a bug later.
 
-**2. A System B entry filed under another org's location (REC-1077) is shown as MISSING to the record's org, as ORPHAN to the entry's org, and as CROSS_TENANT to the operator only (`org = NULL`, never served by the API).**
-Rejected: show a "cross-tenant" row to ORG-A or ORG-B.
-Why: telling either tenant that the record or entry exists elsewhere already reveals the other tenant's data. Each tenant's view stays true from inside its own boundary, and the full diagnosis is printed by `import_data`.
+### 2. REC-1077: show each organisation only its own side
+- **Decision:** The record's organisation (ORG-A) sees "missing"; the entry's organisation (ORG-B) sees "orphan". Only the operator sees the link.
+- **Rejected:** Show both organisations a "cross-organisation" row.
+- **Why:** Telling ORG-A about ORG-B's entry would show ORG-A data that isn't theirs.
 
-**3. Several B entries for one record are a *split* if they sum exactly to A's `total_value`; otherwise they are a DUPLICATE_IN_B.**
-Rejected: flag any record with more than one B entry as a duplicate, or rely on the label text ("part 2 of 2").
-Why: the sum is a general rule that correctly clears REC-1055 and flags REC-1042 without hard-coding either, and labels are free text that can't be trusted.
+### 3. Split or duplicate? Check whether the entries add up
+- **Decision:** Several B entries for one record are a split if they add up exactly to A's value; otherwise they're a duplicate.
+- **Rejected:** Call every repeated record a duplicate, or trust labels like "part 2 of 2".
+- **Why:** One simple rule handles both REC-1055 (split) and REC-1042 (duplicate), and labels are free text.
 
-**4. Store every CSV row as-is (`raw` JSON) next to nullable typed columns plus `parse_errors`.**
-Rejected: reject rows that fail validation, or coerce bad values to 0 or blank.
-Why: the brief forbids silently dropping rows, and a NULL with a recorded reason is honest where a 0 would lie. The importer reports `rows_read == rows_stored` per file.
+### 4. Keep every row, even broken ones
+- **Decision:** Save the original CSV line with every row. A value that can't be read is saved as empty, with a note saying why.
+- **Rejected:** Skip bad rows, or turn bad values into 0.
+- **Why:** The brief says never drop rows silently, and an empty value with a reason is honest; a 0 would be a lie.
 
-**5. Normalise references only by a strict pattern (`REC-?digits`, ignoring case and whitespace), and keep the original.**
-Rejected: fuzzy matching (edit distance, "contains 1034").
-Why: a wrong match hides a real disagreement, while an unmatched ref shows up as an orphan a human can look at. All three dirty forms in the data (`rec1034`, ` REC - 1070 `, `1112`) fit the strict rule.
+### 5. Clean references with one strict rule, never guess
+- **Decision:** `rec1034`, ` REC - 1070 ` and `1112` become `REC-xxxx`. Anything else is left unmatched.
+- **Rejected:** Fuzzy matching ("looks similar to REC-1034").
+- **Why:** A wrong match would hide a real problem; an unmatched reference shows up as an orphan someone can check.
 
-**6. Money is `Decimal`; commas are accepted only as digit-group separators (western and Indian lakh grouping), and `.` is the only decimal point.**
-Rejected: `float`, or stripping every comma.
-Why: `float` makes 0.01 differences unreliable. Stripping every comma silently turned `"1.234,56"` into `1.23456` (caught by a test, see README).
+### 6. Compare money exactly, to the cent
+- **Decision:** Use `Decimal`, compare B's value with A's `total_value`, and allow commas only as thousands separators.
+- **Rejected:** `float`, a tolerance, or removing every comma.
+- **Why:** Float makes cents unreliable, and removing every comma turned `"1.234,56"` into `1.23456` (a test caught it).
 
-**7. Compare B's value with A's `total_value` and require exact equality.**
-Rejected: compare with `base_value`, or allow a tolerance.
-Why: on clean rows B equals `total_value` exactly. The mismatches where B equals `base_value` (REC-1003, 1027, 1088) are real disagreements, so they are flagged with a hint instead of being tolerated.
+### 7. A record voided in A but still in B is a disagreement
+- **Decision:** Flag REC-1019.
+- **Rejected:** Ignore it because B has no status column.
+- **Why:** A cancelled event still counted somewhere else is exactly what a reconciler wants to see. (It's a judgment call.)
 
-**8. Flag a record VOIDED in A that is still live in B (REC-1019) as a disagreement.**
-Rejected: ignore it because B has no state column.
-Why: a voided event still being counted elsewhere is exactly what someone reconciling would want to see. This is a judgment call and is listed as one in the README.
+### 8. The server decides the organisation, not the browser
+- **Decision:** Each data request carries a server-signed token naming its organisation. Naming a different organisation in the request gets 403.
+- **Rejected:** Trust an `X-Org-Id` header or `?org=` (the first version did, and anyone could read any organisation).
+- **Why:** The browser can change anything it sends; a signed token can't be edited. Limit: without a login, the demo picker can still get a token for either organisation.
 
-**9. The tenant comes only from a server-signed tenant-context token. A different tenant named anywhere else in the request gets 403. Without auth, a demo-only endpoint issues the token and can be switched off.**
-Rejected: trusting an `X-Org-Id` header or `?org=` (the first version did this, and any client could read any tenant by changing it), or adding a login system (out of scope).
-Why: the server, not the caller, must decide the tenant. Signing makes the context unforgeable, and the demo issuer is the one place a real login would plug in.
-
-**10. Discrepancies are recomputed and stored at import time (one table), and re-import replaces everything in one transaction.**
-Rejected: compute on every request, or upsert incrementally.
-Why: a stored table makes "filter by reason / sort by value" a plain indexed query, and a full replace makes repeat imports deterministic.
+### 9. Store results at import time; re-import replaces everything
+- **Decision:** Save the disagreements in a table when importing. A new import replaces the old one in a single step.
+- **Rejected:** Recalculate on every page load, or update the old data piece by piece.
+- **Why:** Filtering and sorting become simple database queries, and every import gives the same result.
