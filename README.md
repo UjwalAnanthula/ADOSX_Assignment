@@ -1,159 +1,271 @@
-# ADOSX_Assignment
-A Django and React application that compares records from two systems, detects missing, duplicate and mismatched entries, and ensures secure multi-tenant data isolation.
+# ADOSX Data Reconciliation System
 
-Imports two systems' exports of the same events, finds where they disagree, and shows each tenant (org) only its own disagreements.
+## 1. Project Overview
 
-**Stack:** Django 5/6 + Django REST Framework, PostgreSQL, React (Vite).
+Two systems (A and B) record the same events. Neither one is the source of truth. This app imports both exports, finds the records where they disagree, and shows each organisation (tenant) only its own disagreements.
 
-## Architecture
+## 2. Key Features
 
-```
-data/*.csv ──► importer.py ──► PostgreSQL (raw row + typed columns + parse_errors)
-                                   │
-                    services.py loads rows ─► reconcile.py (pure Python, no DB)
-                                   │                 │
-                                   ◄── Discrepancy rows (one org each, or NULL = operator-only)
-                                   │
-               DRF API (X-Org-Id required) ──► React table (filter by reason, sort by value)
-```
+- Imports the three CSV files into PostgreSQL without dropping any row
+- Matches System B entries to System A records, even when references are messy
+- Finds missing, orphan, duplicate and value-mismatch records (plus a few extra checks)
+- Shows a table with the reason, both values, the difference and the location
+- Filter by reason, sort by value
+- Strict tenant isolation: ORG-A never sees ORG-B data, and vice versa
 
-| File | Role |
+## 3. Technology Stack
+
+| Part | Tools |
 |---|---|
-| `backend/recon/normalize.py` | Parsers for refs, money, dates. Each returns `(value, error)` |
-| `backend/recon/importer.py` | CSV → DB. Every row stored; nothing coerced silently |
-| `backend/recon/reconcile.py` | **The comparison rules.** Pure functions, per-tenant matching |
-| `backend/recon/services.py` | Loads DB rows → `reconcile()` → saves `Discrepancy` rows |
-| `backend/recon/views.py` | Tenant-scoped API |
-| `frontend/src/App.jsx` | The table |
+| Backend | Python, Django, Django REST Framework, psycopg |
+| Database | PostgreSQL (tested on 17) |
+| Frontend | React 18, Vite |
+| Tests | Django test runner (on PostgreSQL), Vitest, Testing Library, jsdom |
 
-### Tables
-- `Org`, `Location`: from `locations.csv`, the only source of location → org.
-- `SystemARecord`, `SystemBEntry`: one row per CSV row. `raw` (JSON) holds the row exactly as read; typed columns are nullable; `parse_errors` says why a value is NULL or how a ref was normalised. `org` is denormalised from location, so tenant scoping is one indexed filter.
-- `Discrepancy`: one disagreement with reason, both values, location, entry ids and detail. `org = NULL` means operator-only.
-- `ImportRun`: audit row per import, with per-file `rows_read` / `rows_stored` and every row-level issue.
+## 4. Architecture
 
-## Setup from a clean clone
+```
+CSV files ──► importer ──► PostgreSQL ──► comparison engine ──► discrepancies table
+                                                                       │
+                       React table ◄── REST API (tenant-scoped) ◄──────┘
+```
 
-Prerequisites: Python 3.11+, Node 18+, PostgreSQL 14+ (local install or Docker).
+1. `import_data` loads the CSVs, then runs the comparison and saves the results.
+2. The API returns only the disagreements of the tenant making the request.
+3. The React page displays them.
 
-**1. Database.** Either use an existing PostgreSQL:
+## 5. Project Structure
+
+```
+backend/
+  config/                  Django settings and URLs
+  recon/
+    models.py              Database tables
+    normalize.py           Parses references, numbers and dates
+    importer.py            CSV → database
+    reconcile.py           Comparison rules (pure Python, no database)
+    services.py            Runs the comparison and saves the results
+    tenancy.py             Decides which tenant a request belongs to
+    views.py, urls.py      API endpoints
+    management/commands/import_data.py
+    tests/                 Backend tests
+frontend/
+  src/App.jsx              The page
+  src/api.js               API calls
+  src/format.js            How values, blanks and differences are shown
+data/                      Put the CSV files here (not committed)
+docker-compose.yml         Optional local PostgreSQL
+DECISIONS.md               Key design decisions
+```
+
+## 6. Database Design
+
+| Table | Holds |
+|---|---|
+| `Org` | One row per organisation (tenant) |
+| `Location` | Each location and the org it belongs to (from `locations.csv`) |
+| `SystemARecord` | One row per line of `system_a.csv` |
+| `SystemBEntry` | One row per line of `system_b.csv` |
+| `Discrepancy` | One row per disagreement found |
+| `ImportRun` | One row per import, with row counts and every parse problem |
+
+- Every imported row keeps the **original CSV line** (`raw`) next to the cleaned values.
+- A value that can't be read is stored as empty (NULL), with a note saying why.
+- Every A record, B entry and discrepancy stores its `org`, taken from its location. This makes filtering by tenant simple and safe.
+
+## 7. How Data Reconciliation Works
+
+1. **Split by organisation.** Each row's org comes from its location in `locations.csv`.
+2. **Clean the reference.** `rec1034`, ` REC - 1070 ` and `1112` become `REC-1034`, `REC-1070` and `REC-1112`.
+3. **Match inside the same org only.** Each A record is paired with the B entries that point at it.
+4. **Compare.** B's value is compared with A's `total_value`, exactly to the cent.
+
+**The four required checks**
+
+| Reason | Meaning |
+|---|---|
+| Missing in B | A record has no B entry |
+| Orphan in B | A B entry points at a record that doesn't exist |
+| Duplicate in B | Several B entries for one record, and they don't add up to A's value |
+| Value mismatch | A and B report different values |
+
+**Split vs duplicate:** if several B entries **add up exactly** to A's value, it's a split, not an error (REC-1055). If they don't, it's a duplicate (REC-1042).
+
+**Extra checks:** invalid/blank value, date mismatch, location mismatch (same org), category mismatch, voided in A but live in B.
+
+**Results on the supplied data**
+
+| Org | Reason | Records |
+|---|---|---|
+| ORG-A | Missing in B | REC-1015, REC-1077 |
+| ORG-A | Orphan in B | REC-1999 |
+| ORG-A | Duplicate in B | REC-1042 |
+| ORG-A | Value mismatch | REC-1027, REC-1064, REC-1088 |
+| ORG-B | Missing in B | REC-1061 |
+| ORG-B | Orphan in B | REC-1077 (its entry) |
+| ORG-B | Value mismatch | REC-1003 |
+| ORG-B | Invalid value (blank) | REC-1050 |
+| ORG-B | Date mismatch | REC-1009 |
+| ORG-B | Voided in A | REC-1019 |
+
+Not flagged, on purpose: REC-1055 (a valid split), and the three messy references, which match correctly.
+
+## 8. Data Handling
+
+| Problem | What happens |
+|---|---|
+| Blank value | Stored as empty with a note; shown as "(blank in System B)", never as 0 |
+| Not a number | Stored as empty with a note; the original text is kept |
+| Commas in numbers | Accepted as thousands separators: `"1,25,400.00"` → 125400.00. `"1.234,56"` is rejected, not guessed |
+| Messy reference | Cleaned to `REC-<digits>`. Anything else is not guessed and becomes an orphan |
+| Same record twice in B | Flagged as a duplicate unless the entries add up to A's value |
+| Extra or missing columns | Row is still stored and flagged |
+| Unknown location, or one claimed by two orgs | Row is stored but belongs to no tenant, so no one sees it |
+
+On the supplied data: 5/5 locations, 120/120 A rows and 121/121 B rows stored. **0 rows dropped.**
+
+## 9. Multi-Tenant Isolation
+
+- **Matching never crosses orgs.** Rows are split by org first, so a result can't mix tenants.
+- **The server decides the tenant.** The page asks the server for a signed tenant token, and every data request must carry it. The tenant is read from the token, never from the URL or a header.
+- **Cross-tenant attempts are rejected.** No token or a fake token returns **401**. A valid token plus another org named in the request returns **403**.
+- **Example, REC-1077:** an ORG-A record whose B entry sits at an ORG-B location. ORG-A sees "missing", ORG-B sees "orphan", and neither sees the other's data.
+- **Limitation:** there is no login (out of scope). The organisation picker is a demo stand-in that can get a token for any org. Turn it off with `ADOSX_DEMO_TENANT_SWITCHING=0`. Real use would need an authenticated login in its place.
+
+## 10. Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- PostgreSQL 14+ (installed locally, or via Docker)
+
+## 11. Installation and Setup
+
+```bash
+git clone https://github.com/UjwalAnanthula/ADOSX_Assignment.git
+cd ADOSX_Assignment
+
+# Backend
+cd backend
+python -m venv .venv
+.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env              # then edit the values (see section 12)
+
+# Frontend
+cd ../frontend
+npm ci
+```
+
+## 12. Environment Configuration
+
+Copy `backend/.env.example` to `backend/.env`. `.env` is git-ignored.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `POSTGRES_DB` | `adosx` | Database name |
+| `POSTGRES_USER` | `adosx` | Database user |
+| `POSTGRES_PASSWORD` | (empty) | Database password |
+| `POSTGRES_HOST` | `localhost` | Database host |
+| `POSTGRES_PORT` | `5432` | Database port |
+| `DJANGO_DEBUG` | `1` | Set `0` outside development |
+| `DJANGO_SECRET_KEY` | random in dev | Signs tenant tokens. **Required** when `DJANGO_DEBUG=0` |
+| `ADOSX_DEMO_TENANT_SWITCHING` | same as `DJANGO_DEBUG` | Enables the demo organisation picker |
+| `TENANT_CONTEXT_MAX_AGE` | `28800` | Tenant token lifetime in seconds |
+| `ADOSX_DATA_DIR` | `data/` | Where the CSV files are |
+
+## 13. Database Setup
+
+**Option A: your own PostgreSQL**
 ```sql
-CREATE ROLE adosx LOGIN PASSWORD 'choose-one' CREATEDB;  -- CREATEDB lets the test runner create its test DB
+CREATE ROLE adosx LOGIN PASSWORD 'choose-one' CREATEDB;   -- CREATEDB is needed for tests
 CREATE DATABASE adosx OWNER adosx;
 ```
-or start a throwaway one with Docker (uses the credentials from `backend/.env`):
+
+**Option B: Docker**
 ```bash
-cp backend/.env.example backend/.env      # then edit values
-docker compose up -d                      # if 5432 is taken: set POSTGRES_PORT in a root .env or your shell
+docker compose up -d      # uses the values in backend/.env
 ```
+If port 5432 is busy, start it on another port (e.g. `POSTGRES_PORT=55432 docker compose up -d`) and set the same port in `backend/.env`.
 
-**2. Configure.** `cp backend/.env.example backend/.env` and set `POSTGRES_*`. Real environment variables override the file. `backend/.env` is git-ignored.
-
-**3. Backend.**
+**Then create the tables:**
 ```bash
 cd backend
-python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
 python manage.py migrate
 ```
 
-**4. Data.** The assignment CSVs are **not** in this repo (not ours to redistribute). Copy `system_a.csv`, `system_b.csv` and `locations.csv` into `data/`, then:
-```bash
-python manage.py import_data                    # --data-dir PATH to use another folder; --verbose-issues to list every note
-python manage.py runserver                      # http://127.0.0.1:8000/api/
-```
-Re-running `import_data` is safe: it replaces the previous load in a single transaction.
+## 14. Data Import
 
-**5. Frontend** (in a second terminal):
+The assignment CSV files are not in this repository. Copy them into `data/`:
+```
+data/system_a.csv
+data/system_b.csv
+data/locations.csv
+```
+Then run:
 ```bash
+cd backend
+python manage.py import_data                   # add --verbose-issues to see every note
+```
+It prints rows read and stored per file, and the disagreements found. Running it again is safe: it replaces the previous import.
+
+## 15. Running the Application
+
+```bash
+# Terminal 1
+cd backend
+python manage.py runserver                     # API on http://127.0.0.1:8000
+
+# Terminal 2
 cd frontend
-npm ci
-npm run dev                                     # http://localhost:5173 (proxies /api to :8000)
+npm run dev                                    # open http://localhost:5173
 ```
 
-### API and tenant context
-The tenant of a data request is decided **only by the server**, from a tenant-context token it signed ([recon/tenancy.py](backend/recon/tenancy.py)). It is never decided by a header, query parameter or the page URL.
+## 16. Running Tests
 
-- `POST /api/tenant-context/` with `{"org": "ORG-A"}` returns `{org, token}`. **Demo only:** a stand-in for login, on when `ADOSX_DEMO_TENANT_SWITCHING=1` (default: same as `DJANGO_DEBUG`). Off, it returns 404.
-- `GET /api/orgs/`: org ids for the demo picker (demo only, same switch).
-- `GET /api/discrepancies/?reason=VALUE_MISMATCH&ordering=-b_value` and `GET /api/summary/` need `Authorization: Bearer <token>`. `ordering` ∈ `a_value, -a_value, b_value, -b_value` (nulls last).
-
-Responses: no or invalid or expired token gives **401**. A valid token plus any *other* tenant named in `X-Org-Id`, `X-Tenant-Id`, `?org=`, `?org_id=`, `?tenant=` or `?tenant_id=` gives **403** (rejected, not silently ignored). Tokens are signed with `DJANGO_SECRET_KEY`. Dev without one uses a random key per process, so contexts reset on restart. With `DJANGO_DEBUG=0` it must be set.
-
-**Limitation (honest):** while demo switching is on, anyone who can reach the API can request any tenant's context. That's the demo picker. What the design guarantees is that *inside* a context nothing reaches another tenant's data, and that switching tenants is an explicit server action. It is **not** production authorisation: that needs an authenticated identity bound to an org, which would replace the demo issuer and leave everything else unchanged.
-
-## Tests
 ```bash
-cd backend && python manage.py test recon       # needs PostgreSQL (and a role allowed to create the test DB)
-cd frontend && npm test
+cd backend && python manage.py test recon      # 57 tests, needs PostgreSQL
+cd frontend && npm test                        # 14 tests
 ```
-- `test_reconcile.py`: the comparison rules. One test per disagreement kind, plus non-errors (split entry, messy refs, labels without a category), dirty values and the tenant boundary. No DB.
-- `test_tenant_security.py`: attacks on the tenant boundary (PostgreSQL). Missing, forged, tampered or expired contexts; ORG-A ⇄ ORG-B via params and headers; cross-tenant comparison rows; contested locations; demo switch off.
-- `test_import_and_api.py`: against PostgreSQL with a synthetic dirty dataset. No row dropped, raw preserved, ragged rows, repeat import, tenant isolation over HTTP, filter and sort.
-- `test_assignment_dataset.py`: exact expected discrepancy set for the real files. **Skipped** if `data/*.csv` are absent.
 
-- `frontend/src/App.test.jsx`: every tenant request carries `X-Org-Id`, switching org clears the reason filter, blank B values never show as 0, header sort, error + Retry, unknown `?reason=` dropped. `format.test.js` covers value display and B − A in exact cents.
+| Test file | Covers |
+|---|---|
+| `test_reconcile.py` | One test per disagreement type, split entries, messy references, blank and invalid values |
+| `test_import_and_api.py` | No rows dropped, raw values kept, repeat import, filtering, sorting |
+| `test_tenant_security.py` | Cross-tenant attacks: fake or expired tokens, wrong org in the request, contested locations |
+| `test_assignment_dataset.py` | Exact results on the real CSVs (skipped if they're not in `data/`) |
+| `App.test.jsx`, `format.test.js` | Tenant token use, org switch, filters, sorting, blank values, error and retry |
 
-At the time of writing: 57 backend tests and 14 frontend tests pass.
+## 17. What Was Deliberately Not Built
 
-## What it finds in the supplied data
+- **Login / authentication:** out of scope per the brief. A demo tenant picker stands in for it.
+- **Advanced dashboards, charts, visual polish:** a clear table is enough.
+- **Performance work and pagination:** each file has about 120 rows.
+- **Fuzzy reference matching:** unclear references are reported, not guessed.
+- **A screen for import problems:** they are printed by `import_data` and stored in `ImportRun`.
 
-Import: locations 5/5, system_a 120/120, system_b 121/121 rows stored. 0 rejected; 5 B rows carry import notes (3 normalised refs, 1 blank value, 1 Indian-format number).
+**Known limitations**
+- If two genuinely duplicated entries happen to add up to A's value, they would pass as a split.
+- The demo tenant picker lets anyone pick any org (see section 9).
 
-| Org | Reason | Record | Why |
-|---|---|---|---|
-| ORG-A | MISSING_IN_B | REC-1015 | no B entry |
-| ORG-A | MISSING_IN_B | REC-1077 | its B entry is filed under ORG-B's LOC-201 |
-| ORG-A | ORPHAN_IN_B | REC-1999 | no such record |
-| ORG-A | DUPLICATE_IN_B | REC-1042 | ENT/2026/4042 and ENT/2026/4902, same value twice |
-| ORG-A | VALUE_MISMATCH | REC-1027, REC-1088 | B = A's base_value (adjustment missing) |
-| ORG-A | VALUE_MISMATCH | REC-1064 | B `"1,25,400.00"` = 125,400.00 vs A 183,244.16 |
-| ORG-B | MISSING_IN_B | REC-1061 | no B entry |
-| ORG-B | ORPHAN_IN_B | REC-1077 | ENT/2026/4077 points at a record not in ORG-B |
-| ORG-B | VALUE_MISMATCH | REC-1003 | B = A's base_value |
-| ORG-B | UNPARSEABLE_VALUE | REC-1050 | B value blank |
-| ORG-B | DATE_MISMATCH | REC-1009 | 03-31 vs 04-02 |
-| ORG-B | VOIDED_IN_A | REC-1019 | voided in A, live in B |
-| operator | CROSS_TENANT | REC-1077 | never served to a tenant |
+## 18. How I Worked with the Agent
 
-**Not flagged, on purpose:** REC-1055 has two B entries (71,950.93 + 107,926.39 = 179,877.32 = A total). That's a split, not a duplicate. `rec1034`, ` REC - 1070 ` and `1112` match their records. The blank `actor_id` on REC-1050 in A is not a disagreement, since B has no actor field.
+> **[YOUR INPUT NEEDED]** In your own words: what you asked the agent (Claude Code) to do, what you checked yourself, and what you changed. Only claim what you did; you'll be asked to defend this code.
 
-## What I built
-- Raw-preserving importer with per-row parse notes and an import audit (`ImportRun`).
-- Comparison engine: missing, orphan, duplicate, value, unparseable value, date, location, category (from B's label), voided, duplicate id in A, unknown location, cross-tenant.
-- Tenant-scoped API and a table UI: summary cards (click to filter), colour-coded reason badges, reason filter, sort by A/B value (dropdown or column header), a B − A column, view state kept in the URL, and loading/empty/error-with-retry states.
+Facts from the build you can check in `git log` and use:
+- The agent read the brief and every CSV row before writing code, and listed the problems it found.
+- The comparison rules were kept in one pure module (`reconcile.py`) so they could be tested without a database.
+- Tests were run on PostgreSQL and on the real data, and the page was checked in a browser.
+- The first tenant design trusted a header the browser could change. It was found and replaced with server-signed tenant tokens.
 
-## What I deliberately did not build
-- Authentication (the brief says to skip it). A demo tenant-context endpoint stands in for login (see *API and tenant context*).
-- A UI for import issues or operator-only findings. They are printed by `import_data` and stored in `ImportRun` / `Discrepancy(org=NULL)`.
-- Checking A's internal arithmetic (`base + adjustment = total`). That's not a cross-system disagreement.
-- Fuzzy reference matching, non-ISO dates, currency symbols. These are reported as unparseable rather than guessed.
-- Pagination, performance work, visual design.
-
-## Known limitations
-- Demo tenant switching lets any caller obtain any tenant's context (see above). Turn it off with `ADOSX_DEMO_TENANT_SWITCHING=0` anywhere real tenants exist.
-- The split rule is "entries sum exactly to A's total". Two genuinely duplicated half-entries that happen to sum to the total would pass as a split.
-- A record with several findings (e.g. value and date) shows as several rows. Sorting by value treats them independently.
-- Re-import replaces everything; there's no history of past discrepancy sets beyond `ImportRun` stats.
-
-## How I worked with the agent
-
-> **[YOUR INPUT NEEDED]** Describe in your own words how you used the agent (Claude Code): what you asked it for, what you checked yourself, and what you changed. The interviewers will ask you to defend this code, so only claim what you did.
-
-Facts from the build session you can verify and use (`git log` shows each step):
-- The agent read the brief and every CSV row first and listed the anomalies before writing code.
-- The comparison rules were written as a pure module (`reconcile.py`) so they could be tested without a database.
-- Tests were run against PostgreSQL and the real dataset, and the UI was driven in a browser (switch org, filter, sort) to check it end to end.
-
-## Questions
+## 19. Assignment Questions
 
 **a. Name one thing the AI agent got wrong. How did you notice?**
-> **[YOUR INPUT NEEDED, in your own words.]** Candidate facts from this session (check them in the commit history before using):
-> - `parse_money` stripped every comma before validating, so the European `"1.234,56"` was silently read as `1.23456`, while its own docstring claimed such input was rejected. A unit test listing bad inputs failed. Fixed in commit "Fix parse_money silently misreading…".
-> - In its first manual read of the CSVs the agent listed two ORG-A value mismatches. The code found a third (REC-1088, B = base_value), confirmed by checking the row by hand. The manual read had been wrong, not the code.
+> **[YOUR INPUT NEEDED]** Candidates, verify before using:
+> - The number parser read `"1.234,56"` as `1.23456` while its own comment said it would reject it. A unit test failed and caught it.
+> - The first version trusted an `X-Org-Id` header for the tenant, so any caller could read any org's data by changing it.
 
 **b. Which part of your submission are you least confident about, and why?**
-> **[YOUR INPUT NEEDED.]** Candidates: the REC-1077 cross-tenant treatment (DECISIONS #2) and whether VOIDED-in-A should be a disagreement (DECISIONS #8). Both are judgment calls the brief doesn't settle.
+> **[YOUR INPUT NEEDED]** Candidates: how REC-1077 is shown to each tenant, and whether "voided in A" should count as a disagreement. The brief doesn't settle either one.
 
 **c. If you had a second day, what would you fix first?**
-> **[YOUR INPUT NEEDED.]** Candidates: show import issues and operator-only findings in the UI, and make the split-vs-duplicate rule stricter (e.g. also require distinct entry ids and labels).
+> **[YOUR INPUT NEEDED]** Candidates: replace the demo tenant picker with real login, and add a screen for import problems.
