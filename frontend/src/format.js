@@ -28,8 +28,8 @@ export function displayDifference(row) {
     return { text: "—", kind: "none" };
   }
   const cents = Math.round(b * 100) - Math.round(a * 100);
-  if (cents === 0) return { text: "0.00", kind: "number" };
-  return { text: `${cents > 0 ? "+" : "−"}${fmt.format(Math.abs(cents) / 100)}`, kind: "number" };
+  if (cents === 0) return { text: "0.00", kind: "number", sign: 0 };
+  return { text: `${cents > 0 ? "+" : "−"}${fmt.format(Math.abs(cents) / 100)}`, kind: "number", sign: Math.sign(cents) };
 }
 
 // Header click cycles: not sorted -> high to low -> low to high -> not sorted.
