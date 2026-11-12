@@ -7,7 +7,9 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 _REF_RE = re.compile(r"(?:REC)?-?(\d+)")
-_MONEY_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# Plain digits, or comma-grouped digits whose last group before the decimal
+# point has exactly 3 digits (western "125,400" and Indian "1,25,400").
+_MONEY_RE = re.compile(r"-?(?:\d+|\d{1,3}(?:,\d{2,3})*,\d{3})(?:\.\d+)?")
 _LABEL_CATEGORY_RE = re.compile(r"Entry for (CAT-\d+)", re.I)
 
 
@@ -28,17 +30,18 @@ def normalize_ref(raw):
 def parse_money(raw):
     """Parse a monetary amount into a Decimal.
 
-    Commas are treated as digit-group separators wherever they fall, so both
-    western ("125,400.00") and Indian lakh grouping ("1,25,400.00") parse to
+    Commas are accepted only in digit-group positions, so both western
+    ("125,400.00") and Indian lakh grouping ("1,25,400.00") parse to
     125400.00. "." is the only decimal separator accepted: a European
     "1.234,56" is rejected as unparseable rather than silently misread.
     Decimal, never float, so a 0.01 difference is a real difference.
     """
     if raw is None or raw.strip() == "":
         return None, "blank"
-    cleaned = raw.strip().replace(",", "")
-    if not _MONEY_RE.fullmatch(cleaned):
+    stripped = raw.strip()
+    if not _MONEY_RE.fullmatch(stripped):
         return None, f"not a number: {raw!r}"
+    cleaned = stripped.replace(",", "")
     try:
         return Decimal(cleaned), None
     except InvalidOperation:  # pragma: no cover - the regex already guards this
