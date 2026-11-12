@@ -151,3 +151,5 @@ class FilterSortApiTests(ImportedDataTestCase):
         total = sum(r["count"] for r in body["reasons"])
         self.assertEqual(total, Discrepancy.objects.filter(org="ORG-A").count())
         self.assertEqual(body["import"]["system_a_rows"], 3)
+        self.assertIsNotNone(body["last_import"])
+        self.assertNotIn("stats", body)

@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
 from recon.importer import import_all
 from recon.models import Discrepancy
@@ -14,8 +15,12 @@ class Command(BaseCommand):
         parser.add_argument("--verbose-issues", action="store_true", help="Print every row-level parse issue")
 
     def handle(self, *args, data_dir, verbose_issues, **opts):
+        # Import and rebuild commit together: a failed rebuild must not leave new rows
+        # next to the previous import's discrepancies.
         try:
-            run = import_all(data_dir)
+            with transaction.atomic():
+                run = import_all(data_dir)
+                counts = rebuild_discrepancies()
         except FileNotFoundError as exc:
             raise CommandError(str(exc)) from exc
 
@@ -30,7 +35,6 @@ class Command(BaseCommand):
                 for issue in s["issues"]:
                     self.stdout.write(f"      line {issue['line']}: {'; '.join(issue['errors'])}")
 
-        counts = rebuild_discrepancies()
         self.stdout.write("Discrepancies:")
         for (org, reason), n in sorted(counts.items()):
             self.stdout.write(f"  {org:16} {reason:18} {n}")

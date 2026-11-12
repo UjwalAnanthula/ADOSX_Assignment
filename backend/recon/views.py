@@ -14,7 +14,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Discrepancy, Org, Reason, SystemARecord, SystemBEntry
+from .models import Discrepancy, ImportRun, Org, Reason, SystemARecord, SystemBEntry
 
 ORG_HEADER = "X-Org-Id"
 ORDERINGS = {
@@ -80,8 +80,11 @@ class SummaryView(TenantScopedMixin, APIView):
         by_reason = dict(
             Discrepancy.objects.filter(org=org).values_list("reason").annotate(n=Count("id")).order_by("reason")
         )
+        last_run = ImportRun.objects.order_by("-created_at").first()
         return Response({
             "org": org.pk,
+            # Timestamp only: ImportRun.stats spans every tenant, so it is never exposed here.
+            "last_import": last_run.created_at if last_run else None,
             "reasons": [{"code": c, "label": l, "count": by_reason.get(c, 0)} for c, l in Reason.choices],
             "import": {
                 "system_a_rows": SystemARecord.objects.filter(org=org).count(),
