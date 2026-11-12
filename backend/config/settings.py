@@ -5,7 +5,10 @@ convenience, KEY=VALUE lines in backend/.env are loaded if the file exists
 (see .env.example). Real environment variables always win.
 """
 import os
+import secrets
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BASE_DIR.parent
@@ -23,8 +26,15 @@ def _load_dotenv(path):
 
 _load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-insecure-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+
+# SECRET_KEY signs tenant-context tokens, so it must never be a value committed to the repo.
+# Dev without one: a random key per process (tenant contexts reset on restart).
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("Set DJANGO_SECRET_KEY when DJANGO_DEBUG=0.")
+    SECRET_KEY = secrets.token_urlsafe(50)
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 
 INSTALLED_APPS = [
@@ -48,8 +58,9 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
-    "DEFAULT_PERMISSION_CLASSES": [],
+    # Tenant scoping is the default for every view (see recon/tenancy.py).
+    "DEFAULT_AUTHENTICATION_CLASSES": ["recon.tenancy.TenantTokenAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["recon.tenancy.TenantContextRequired"],
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "COERCE_DECIMAL_TO_STRING": True,  # money stays exact on the wire
@@ -58,6 +69,11 @@ REST_FRAMEWORK = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 TIME_ZONE = "UTC"
+
+# Demo stand-in for login: POST /api/tenant-context/ issues a context for any org.
+# Defaults to on only with DEBUG. Turn off anywhere real tenants exist.
+ADOSX_DEMO_TENANT_SWITCHING = os.environ.get("ADOSX_DEMO_TENANT_SWITCHING", "1" if DEBUG else "0") == "1"
+TENANT_CONTEXT_MAX_AGE = int(os.environ.get("TENANT_CONTEXT_MAX_AGE", 8 * 3600))  # seconds
 
 # Where `manage.py import_data` looks by default.
 DATA_DIR = Path(os.environ.get("ADOSX_DATA_DIR", REPO_ROOT / "data"))
