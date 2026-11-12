@@ -52,9 +52,17 @@ class ImportedDataTestCase(TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def get(self, org, **params):
-        headers = {"HTTP_X_ORG_ID": org} if org else {}
-        return self.client.get("/api/discrepancies/", params, **headers)
+    def token(self, org):
+        """Establish a (demo) tenant context the way the frontend does."""
+        resp = self.client.post("/api/tenant-context/", {"org": org}, format="json")
+        self.assertEqual(resp.status_code, 201, resp.content)
+        return resp.json()["token"]
+
+    def auth(self, org):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token(org)}"}
+
+    def get(self, org, path="/api/discrepancies/", **params):
+        return self.client.get(path, params, **(self.auth(org) if org else {}))
 
 
 class ImporterTests(ImportedDataTestCase):
@@ -97,12 +105,12 @@ class ImporterTests(ImportedDataTestCase):
 
 
 class TenantIsolationApiTests(ImportedDataTestCase):
-    def test_org_header_required(self):
-        self.assertEqual(self.get(None).status_code, 400)
-        self.assertEqual(self.client.get("/api/summary/").status_code, 400)
+    def test_tenant_context_required(self):
+        self.assertEqual(self.get(None).status_code, 401)
+        self.assertEqual(self.client.get("/api/summary/").status_code, 401)
 
-    def test_unknown_org_rejected(self):
-        self.assertEqual(self.get("ORG-Z").status_code, 404)
+    def test_unknown_org_gets_no_context(self):
+        self.assertEqual(self.client.post("/api/tenant-context/", {"org": "ORG-Z"}, format="json").status_code, 404)
 
     def test_each_org_sees_only_its_own_rows(self):
         own_locations = {"ORG-A": {"LOC-101"}, "ORG-B": {"LOC-201"}}
@@ -147,7 +155,7 @@ class FilterSortApiTests(ImportedDataTestCase):
         self.assertEqual(self.get("ORG-B", ordering="detail").status_code, 400)
 
     def test_summary_counts_are_tenant_scoped(self):
-        body = self.client.get("/api/summary/", HTTP_X_ORG_ID="ORG-A").json()
+        body = self.get("ORG-A", path="/api/summary/").json()
         total = sum(r["count"] for r in body["reasons"])
         self.assertEqual(total, Discrepancy.objects.filter(org="ORG-A").count())
         self.assertEqual(body["import"]["system_a_rows"], 3)
