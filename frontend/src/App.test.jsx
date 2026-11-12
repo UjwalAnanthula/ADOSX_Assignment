@@ -41,11 +41,18 @@ beforeEach(() => {
   failNextDiscrepancies = false;
   window.history.replaceState(null, "", "/");
   globalThis.fetch = vi.fn(async (url, opts = {}) => {
-    const org = opts.headers?.["X-Org-Id"];
     const u = new URL(url, "http://localhost");
+    if (opts.headers?.["X-Org-Id"]) throw new Error("client must not self-declare its tenant");
+    // The fake server issues "tok-<org>" and resolves the tenant only from that token.
+    const auth = opts.headers?.Authorization || "";
+    const org = auth.startsWith("Bearer tok-") ? auth.slice("Bearer tok-".length) : undefined;
     calls.push({ path: u.pathname, org, params: Object.fromEntries(u.searchParams) });
     if (u.pathname === "/api/orgs/") return ok(Object.keys(ROWS));
-    if (!org) return { ...fail(), status: 400 };
+    if (u.pathname === "/api/tenant-context/") {
+      const requested = JSON.parse(opts.body).org;
+      return ok({ org: requested, token: `tok-${requested}`, mode: "demo" });
+    }
+    if (!org) return { ...fail(), status: 401 };
     if (u.pathname === "/api/summary/") return ok(summaryFor(org));
     if (failNextDiscrepancies) { failNextDiscrepancies = false; return fail(); }
     const reason = u.searchParams.get("reason");
@@ -58,13 +65,16 @@ afterEach(cleanup);
 const tableRows = () => screen.getAllByRole("row").slice(1); // drop header row
 
 describe("App", () => {
-  it("shows the first org's disagreements and scopes every tenant request with X-Org-Id", async () => {
+  it("gets a server tenant context first, then sends only its token on data requests", async () => {
     render(<App />);
     expect(await screen.findByText("REC-1027")).toBeTruthy();
     expect(tableRows()).toHaveLength(2);
-    const tenantCalls = calls.filter((c) => c.path !== "/api/orgs/");
-    expect(tenantCalls.length).toBeGreaterThan(0);
-    expect(tenantCalls.every((c) => c.org === "ORG-A")).toBe(true);
+    const paths = calls.map((c) => c.path);
+    expect(paths.indexOf("/api/tenant-context/")).toBeLessThan(paths.indexOf("/api/summary/"));
+    const dataCalls = calls.filter((c) => c.path === "/api/summary/" || c.path === "/api/discrepancies/");
+    expect(dataCalls.length).toBeGreaterThan(0);
+    expect(dataCalls.every((c) => c.org === "ORG-A")).toBe(true); // every data call carries ORG-A's token
+    expect(dataCalls.every((c) => !("org" in c.params))).toBe(true); // tenant never sent as a parameter
   });
 
   it("switching org shows only that org's rows and clears the reason filter", async () => {

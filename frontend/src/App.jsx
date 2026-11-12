@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchDiscrepancies, fetchOrgs, fetchSummary } from "./api.js";
+import { createTenantContext, fetchDiscrepancies, fetchOrgs, fetchSummary } from "./api.js";
 import { displayB, displayDifference, displayValue, nextOrdering } from "./format.js";
 import Icon from "./Icon.jsx";
 import { SUMMARY_CARDS, reasonMeta } from "./reasons.js";
@@ -77,6 +77,7 @@ export default function App() {
   const initial = useRef(readUrlState()).current;
   const [orgs, setOrgs] = useState([]);
   const [org, setOrg] = useState("");
+  const [ctx, setCtx] = useState(null); // { org, token }: the server-issued tenant context
   const [summary, setSummary] = useState(null);
   const [reason, setReason] = useState(initial.reason);
   const [ordering, setOrdering] = useState(SORTS.some((s) => s.value === initial.ordering) ? initial.ordering : "");
@@ -106,15 +107,26 @@ export default function App() {
     if (!org) return;
     if (previousOrg.current && previousOrg.current !== org) setReason("");
     previousOrg.current = org;
+    setCtx(null);
     setSummary(null);
     setStatus("loading");
-    fetchSummary(org).then(setSummary).catch(fail);
+    // Picking an org asks the server for a tenant context; all data calls then use its token.
+    let cancelled = false;
+    createTenantContext(org)
+      .then((c) => {
+        if (cancelled) return null;
+        setCtx(c);
+        return fetchSummary(c.token);
+      })
+      .then((s) => { if (!cancelled && s) setSummary(s); })
+      .catch((e) => { if (!cancelled) fail(e); });
+    return () => { cancelled = true; };
   }, [org, fail, reloadKey]);
 
   // Waits for this tenant's summary so a stale/unknown reason (e.g. from an old link)
   // is dropped before it reaches the API. A Retry refetches the summary, which re-runs this.
   useEffect(() => {
-    if (!org || !summary || summary.org !== org) return;
+    if (!ctx || ctx.org !== org || !summary || summary.org !== ctx.org) return;
     if (reason && !summary.reasons.some((r) => r.code === reason && r.count > 0)) {
       setReason("");
       return;
@@ -122,11 +134,11 @@ export default function App() {
     writeUrlState({ org, reason, ordering });
     let cancelled = false;
     setStatus("loading");
-    fetchDiscrepancies(org, { reason, ordering })
+    fetchDiscrepancies(ctx.token, { reason, ordering })
       .then((data) => { if (!cancelled) { setRows(data); setStatus("ready"); } })
       .catch((e) => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
-  }, [org, summary, reason, ordering, fail]);
+  }, [org, ctx, summary, reason, ordering, fail]);
 
   const reasons = summary ? summary.reasons.filter((r) => r.count > 0) : [];
   const total = reasons.reduce((n, r) => n + r.count, 0);
@@ -160,8 +172,11 @@ export default function App() {
       <main className="page">
         <div className="page-head">
           <div>
-            <h1>Disagreements {org && <span className="org-chip">{org}</span>}</h1>
-            <p className="subtle">Only this organisation's records are shown. Values are compared exactly, to the cent.</p>
+            <h1>Disagreements {ctx && <span className="org-chip" title="Tenant context issued by the server">{ctx.org}</span>}</h1>
+            <p className="subtle">
+              The server scopes every result to the tenant context it issued. The organisation picker is a demo
+              stand-in for login. Values are compared exactly, to the cent.
+            </p>
           </div>
           {summary && (
             <dl className="facts">
