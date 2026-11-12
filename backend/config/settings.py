@@ -17,7 +17,7 @@ REPO_ROOT = BASE_DIR.parent
 def _load_dotenv(path):
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():  # tolerate a BOM (PowerShell 5.1)
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
