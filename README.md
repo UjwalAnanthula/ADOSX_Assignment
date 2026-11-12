@@ -277,7 +277,7 @@ I used Claude Code as my coding agent. It wrote most of the code. My job was to 
 - **I set the decisions.** I gave it the brief and the data and chose the stack: Django + DRF, PostgreSQL, React. I asked it to read the CSVs and list the problems before writing any code, and to commit step by step.
 - **I didn't trust "it works".** I asked it to prove things. When I asked whether it had really tested the app in the browser, it admitted screenshots weren't working and it had only read the page content. I also had it recheck REC-1042, REC-1055, REC-1077 and the row counts directly against the CSVs, not against the app's own output.
 - **I questioned the design and tested the fix myself.** The organisation picker looked like it might just be filtering on the screen. I asked about it, and when I tested the agent's fix, it didn't do everything it claimed (see question a).
-- **I kept my own rules.** The data files stay out of the repository, and every commit is in my name.
+- **I kept my own rules.** The data files stay out of the repository .
 
 ## 19. Assignment Questions
 
