@@ -276,14 +276,16 @@ I used Claude Code as my coding agent. It wrote most of the code. My job was to 
 
 - **I set the decisions.** I gave it the brief and the data and chose the stack: Django + DRF, PostgreSQL, React. I asked it to read the CSVs and list the problems before writing any code, and to commit step by step.
 - **I didn't trust "it works".** I asked it to prove things. When I asked whether it had really tested the app in the browser, it admitted screenshots weren't working and it had only read the page content. I also had it recheck REC-1042, REC-1055, REC-1077 and the row counts directly against the CSVs, not against the app's own output.
-- **I questioned the design.** The organisation picker looked like it might just be filtering on the screen. I asked about it, and that led to the security fix (see question a).
+- **I questioned the design and tested the fix myself.** The organisation picker looked like it might just be filtering on the screen. I asked about it, and when I tested the agent's fix, it didn't do everything it claimed (see question a).
 - **I kept my own rules.** The data files stay out of the repository, and every commit is in my name.
 
 ## 19. Assignment Questions
 
 **a. Name one thing the AI agent got wrong. How did you notice?**
 
-Tenant isolation. In the first version the backend did filter every query by organisation, but it took the organisation from an `X-Org-Id` header that the browser sets. I noticed because the page had an org picker and `?org=` in the URL, and I asked whether changing it would show the other organisation's data. It did: one request with `X-Org-Id: ORG-B` returned all of ORG-B's rows. The fix was to have the server issue a signed tenant token and reject any request that names a different organisation. Tests now try these attacks.
+Tenant isolation, twice. In the first version the backend filtered every query by organisation, but took the organisation from an `X-Org-Id` header that the browser sets. I asked whether changing the org picker or `?org=` would show the other organisation's data, and it did.
+
+The agent then added a server-signed tenant token. Now a request inside ORG-A's context that tries to reach ORG-B is rejected (403), and tests try these attacks. But the agent described this as fixed, and it wasn't. When I tried it myself, switching from ORG-A to ORG-B still showed ORG-B's data, because the demo picker can ask the server for any organisation's token. Without a login, the server can't know which organisation a user is allowed to see. The token stops mixing tenants inside a request; it doesn't stop anyone from picking the other tenant.
 
 **b. Which part of your submission are you least confident about, and why?**
 
