@@ -249,23 +249,23 @@ cd frontend && npm test                        # 14 tests
 
 ## 18. How I Worked with the Agent
 
-> **[YOUR INPUT NEEDED]** In your own words: what you asked the agent (Claude Code) to do, what you checked yourself, and what you changed. Only claim what you did; you'll be asked to defend this code.
+I used Claude Code as my coding agent. It wrote most of the code. My job was to set the direction and check its work.
 
-Facts from the build you can check in `git log` and use:
-- The agent read the brief and every CSV row before writing code, and listed the problems it found.
-- The comparison rules were kept in one pure module (`reconcile.py`) so they could be tested without a database.
-- Tests were run on PostgreSQL and on the real data, and the page was checked in a browser.
-- The first tenant design trusted a header the browser could change. It was found and replaced with server-signed tenant tokens.
+- **I set the decisions.** I gave it the brief and the data and chose the stack: Django + DRF, PostgreSQL, React. I asked it to read the CSVs and list the problems before writing any code, and to commit step by step.
+- **I didn't trust "it works".** I asked it to prove things. When I asked whether it had really tested the app in the browser, it admitted screenshots weren't working and it had only read the page content. I also had it recheck REC-1042, REC-1055, REC-1077 and the row counts directly against the CSVs, not against the app's own output.
+- **I questioned the design.** The organisation picker looked like it might just be filtering on the screen. I asked about it, and that led to the security fix (see question a).
+- **I kept my own rules.** The data files stay out of the repository, and every commit is in my name.
 
 ## 19. Assignment Questions
 
 **a. Name one thing the AI agent got wrong. How did you notice?**
-> **[YOUR INPUT NEEDED]** Candidates, verify before using:
-> - The number parser read `"1.234,56"` as `1.23456` while its own comment said it would reject it. A unit test failed and caught it.
-> - The first version trusted an `X-Org-Id` header for the tenant, so any caller could read any org's data by changing it.
+
+Tenant isolation. In the first version the backend did filter every query by organisation, but it took the organisation from an `X-Org-Id` header that the browser sets. I noticed because the page had an org picker and `?org=` in the URL, and I asked whether changing it would show the other organisation's data. It did: one request with `X-Org-Id: ORG-B` returned all of ORG-B's rows. The fix was to have the server issue a signed tenant token and reject any request that names a different organisation. Tests now try these attacks.
 
 **b. Which part of your submission are you least confident about, and why?**
-> **[YOUR INPUT NEEDED]** Candidates: how REC-1077 is shown to each tenant, and whether "voided in A" should count as a disagreement. The brief doesn't settle either one.
+
+The rule that separates a split entry from a duplicate. If several B entries add up exactly to A's value, I treat them as a split (REC-1055); otherwise, a duplicate (REC-1042). It works on this data, but two real duplicates that happen to add up to the right total would slip through as a split.
 
 **c. If you had a second day, what would you fix first?**
-> **[YOUR INPUT NEEDED]** Candidates: replace the demo tenant picker with real login, and add a screen for import problems.
+
+Replace the demo organisation picker with a real login. Right now anyone can pick any organisation; with a login, the tenant token would come from who the user is. After that, I'd add a screen showing import problems, which today are only printed in the terminal.
