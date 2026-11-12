@@ -1,4 +1,4 @@
-# Optional: a throwaway local PostgreSQL for development.
+# Optional: runs PostgreSQL only. Django and React run on your machine (see README).
 # Credentials come from backend/.env (copy backend/.env.example first).
 services:
   db:
@@ -6,3 +6,8 @@ services:
     env_file: backend/.env
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

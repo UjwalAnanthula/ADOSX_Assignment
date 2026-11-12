@@ -11,7 +11,7 @@ Two systems (A and B) record the same events. Neither one is the source of truth
 - Finds missing, orphan, duplicate and value-mismatch records (plus a few extra checks)
 - Shows a table with the reason, both values, the difference and the location
 - Filter by reason, sort by value
-- Strict tenant isolation: ORG-A never sees ORG-B data, and vice versa
+- Tenant-scoped data access, enforced by the backend with server-signed tenant tokens. The organisation picker is a demo, not a login or production authorisation
 
 ## 3. Technology Stack
 
@@ -54,7 +54,7 @@ frontend/
   src/api.js               API calls
   src/format.js            How values, blanks and differences are shown
 data/                      Put the CSV files here (not committed)
-docker-compose.yml         Optional local PostgreSQL
+docker-compose.yml         Optional: runs PostgreSQL only
 DECISIONS.md               Key design decisions
 ```
 
@@ -143,16 +143,29 @@ On the supplied data: 5/5 locations, 120/120 A rows and 121/121 B rows stored. *
 ```bash
 git clone https://github.com/UjwalAnanthula/ADOSX_Assignment.git
 cd ADOSX_Assignment
+```
 
-# Backend
+**Backend, Windows (PowerShell)**
+```powershell
 cd backend
 python -m venv .venv
-.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env       # then edit the values (see section 12)
+```
+
+**Backend, macOS / Linux**
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env              # then edit the values (see section 12)
+```
 
-# Frontend
-cd ../frontend
+**Frontend (any OS)**
+```bash
+cd frontend
 npm ci
 ```
 
@@ -181,11 +194,21 @@ CREATE ROLE adosx LOGIN PASSWORD 'choose-one' CREATEDB;   -- CREATEDB is needed 
 CREATE DATABASE adosx OWNER adosx;
 ```
 
-**Option B: Docker**
+**Option B: Docker (PostgreSQL only)**
+
+Docker runs only the database. Django and React still run on your machine (section 15). Run from the repository root, after creating `backend/.env`:
 ```bash
-docker compose up -d      # uses the values in backend/.env
+docker compose up -d      # start PostgreSQL (uses the values in backend/.env)
+docker compose down       # stop it; data is kept in the "pgdata" volume
+docker compose down -v    # stop it and delete the data
 ```
-If port 5432 is busy, start it on another port (e.g. `POSTGRES_PORT=55432 docker compose up -d`) and set the same port in `backend/.env`.
+If port 5432 is busy, use another port and set the same `POSTGRES_PORT` in `backend/.env`:
+```powershell
+$env:POSTGRES_PORT = "55432"; docker compose up -d     # PowerShell
+```
+```bash
+POSTGRES_PORT=55432 docker compose up -d               # macOS / Linux
+```
 
 **Then create the tables:**
 ```bash
